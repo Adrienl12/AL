@@ -3,203 +3,482 @@ const ctx = canvas.getContext('2d');
 const width = canvas.width;
 const height = canvas.height;
 
-const BIRD_SIZE = 24;
-const GRAVITY = 0.55;
-const JUMP = -10.5;
-const PIPE_WIDTH = 80;
-const PIPE_GAP = 180;
-const PIPE_INTERVAL = 1500;
-const FLOOR_HEIGHT = 80;
-
-let bird;
-let pipes;
-let lastPipeTime;
-let score;
-let bestScore;
-let state;
-let frame;
+const TILE = 24;
+const MAP_TOP = 72;
+const MAP_ROWS = 18;
+const MAP_COLS = 19;
+const SPEED = 2.1;
+const GHOST_SPEED = 1.8;
+const FRIGHTENED_SPEED = 1.3;
+const FRIGHTENED_DURATION = 680;
 
 const states = {
   splash: 0,
   playing: 1,
-  gameOver: 2,
+  win: 2,
+  gameOver: 3,
 };
 
-function resetGame() {
-  bird = {
-    x: width * 0.25,
-    y: height * 0.45,
-    vy: 0,
-    radius: BIRD_SIZE / 2,
-  };
+const rawMap = [
+  '###################',
+  '#........#........#',
+  '#.###.###.#.###.###',
+  '#o###.###.#.###.###',
+  '#.................#',
+  '#.###.#.#####.#.###',
+  '#.....#...#...#....#',
+  '#####.#.###.#.#####',
+  '    #.#.....#.#    ',
+  '#####.#.###.#.#####',
+  '#........#........#',
+  '#.###.###.#.###.###',
+  '#o..#.....P.....#o.#',
+  '###.#.#.###.#.#.###',
+  '#.....#...#...#....#',
+  '#.#########.####.###',
+  '#........#........#',
+  '###################',
+];
 
-  pipes = [];
-  lastPipeTime = performance.now();
-  score = 0;
-  frame = 0;
-  state = states.splash;
+const directions = {
+  ArrowUp: {dx: 0, dy: -1},
+  ArrowDown: {dx: 0, dy: 1},
+  ArrowLeft: {dx: -1, dy: 0},
+  ArrowRight: {dx: 1, dy: 0},
+};
+
+let grid;
+let score = 0;
+let bestScore = 0;
+let state = states.splash;
+let frame = 0;
+let player;
+let ghosts;
+let frightenedTimer = 0;
+let pelletsRemaining = 0;
+
+function initializeGrid() {
+  grid = rawMap.map(row => row.split(''));
+  pelletsRemaining = 0;
+  for (let row = 0; row < MAP_ROWS; row += 1) {
+    for (let col = 0; col < MAP_COLS; col += 1) {
+      const cell = grid[row][col];
+      if (cell === '.' || cell === 'o') {
+        pelletsRemaining += 1;
+      }
+      if (cell === 'P') {
+        player.row = row;
+        player.col = col;
+        grid[row][col] = ' ';
+      }
+    }
+  }
 }
 
-function spawnPipe() {
-  const minY = 120;
-  const maxY = height - FLOOR_HEIGHT - PIPE_GAP - 120;
-  const top = Math.random() * (maxY - minY) + minY;
+function toPixel(col) {
+  return col * TILE + TILE / 2;
+}
 
-  pipes.push({
-    x: width,
-    top,
-    passed: false,
+function toRowCenter(row) {
+  return MAP_TOP + row * TILE + TILE / 2;
+}
+
+function isWall(row, col) {
+  if (row < 0 || row >= MAP_ROWS) return true;
+  if (col < 0 || col >= MAP_COLS) {
+    if (row === 8) return false;
+    return true;
+  }
+  return grid[row][col] === '#';
+}
+
+function wrappedCol(col, row) {
+  if (row === 8) {
+    if (col < 0) return MAP_COLS - 1;
+    if (col >= MAP_COLS) return 0;
+  }
+  return col;
+}
+
+function canMove(row, col, dir) {
+  if (!dir) return false;
+  const nextRow = row + dir.dy;
+  const nextCol = wrappedCol(col + dir.dx, row);
+  return !isWall(nextRow, nextCol);
+}
+
+function getMapCell(row, col) {
+  if (row < 0 || row >= MAP_ROWS) return '#';
+  const wrapped = wrappedCol(col, row);
+  return grid[row][wrapped] || '#';
+}
+
+function resetGame() {
+  player = {
+    row: 12,
+    col: 9,
+    x: 0,
+    y: 0,
+    dir: {dx: 0, dy: 0},
+    nextDir: {dx: 0, dy: 0},
+    speed: SPEED,
+  };
+
+  ghosts = [
+    {row: 9, col: 8, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ff6a6a', frightened: false, home: {row: 9, col: 8}},
+    {row: 9, col: 10, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ffb347', frightened: false, home: {row: 9, col: 10}},
+    {row: 10, col: 8, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#6fdfff', frightened: false, home: {row: 10, col: 8}},
+    {row: 10, col: 10, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ff8cff', frightened: false, home: {row: 10, col: 10}},
+  ];
+
+  initializeGrid();
+  player.x = toPixel(player.col);
+  player.y = toRowCenter(player.row);
+  ghosts.forEach(ghost => {
+    ghost.x = toPixel(ghost.col);
+    ghost.y = toRowCenter(ghost.row);
+    ghost.frightened = false;
+  });
+
+  score = 0;
+  frightenedTimer = 0;
+  state = states.splash;
+  frame = 0;
+}
+
+function chooseGhostDirection(ghost) {
+  const currentRow = Math.round((ghost.y - MAP_TOP - TILE / 2) / TILE);
+  const currentCol = Math.round((ghost.x - TILE / 2) / TILE);
+  const possible = [];
+  const reverse = {dx: -ghost.dir.dx, dy: -ghost.dir.dy};
+
+  for (const dir of Object.values(directions)) {
+    if (dir.dx === reverse.dx && dir.dy === reverse.dy) continue;
+    if (canMove(currentRow, currentCol, dir)) {
+      possible.push(dir);
+    }
+  }
+
+  if (possible.length === 0) {
+    if (canMove(currentRow, currentCol, reverse)) {
+      return reverse;
+    }
+    return {dx: 0, dy: 0};
+  }
+
+  if (ghost.frightened) {
+    return possible[Math.floor(Math.random() * possible.length)];
+  }
+
+  const targetRow = player.row;
+  const targetCol = player.col;
+  possible.sort((a, b) => {
+    const aRow = currentRow + a.dy;
+    const aCol = wrappedCol(currentCol + a.dx, currentRow);
+    const bRow = currentRow + b.dy;
+    const bCol = wrappedCol(currentCol + b.dx, currentRow);
+    const aDist = Math.abs(aRow - targetRow) + Math.abs(aCol - targetCol);
+    const bDist = Math.abs(bRow - targetRow) + Math.abs(bCol - targetCol);
+    return aDist - bDist;
+  });
+
+  if (Math.random() < 0.15 && possible.length > 1) {
+    return possible[Math.floor(Math.random() * possible.length)];
+  }
+
+  return possible[0];
+}
+
+function updatePlayer() {
+  const centerX = toPixel(player.col);
+  const centerY = toRowCenter(player.row);
+  const atCenter = Math.abs(player.x - centerX) < 0.6 && Math.abs(player.y - centerY) < 0.6;
+
+  if (atCenter) {
+    player.x = centerX;
+    player.y = centerY;
+    if (canMove(player.row, player.col, player.nextDir)) {
+      player.dir = player.nextDir;
+    }
+    if (!canMove(player.row, player.col, player.dir)) {
+      player.dir = {dx: 0, dy: 0};
+    }
+  }
+
+  if (player.dir.dx !== 0 || player.dir.dy !== 0) {
+    const nextRow = player.row + player.dir.dy;
+    const nextCol = wrappedCol(player.col + player.dir.dx, player.row);
+    if (!isWall(nextRow, nextCol)) {
+      player.x += player.dir.dx * player.speed;
+      player.y += player.dir.dy * player.speed;
+      if (player.row === 8) {
+        if (player.x < -TILE / 2) player.x = width + TILE / 2;
+        if (player.x > width + TILE / 2) player.x = -TILE / 2;
+      }
+      player.row = Math.round((player.y - MAP_TOP - TILE / 2) / TILE);
+      player.col = Math.round((player.x - TILE / 2) / TILE);
+    } else {
+      player.x = centerX;
+      player.y = centerY;
+      player.dir = {dx: 0, dy: 0};
+    }
+  }
+
+  const cell = getMapCell(player.row, player.col);
+  if (cell === '.' || cell === 'o') {
+    grid[player.row][wrappedCol(player.col, player.row)] = ' ';
+    pelletsRemaining -= 1;
+    score += cell === 'o' ? 50 : 10;
+
+    if (cell === 'o') {
+      frightenedTimer = FRIGHTENED_DURATION;
+      ghosts.forEach(ghost => {
+        ghost.frightened = true;
+      });
+    }
+
+    if (pelletsRemaining <= 0) {
+      state = states.win;
+    }
+  }
+}
+
+function updateGhosts() {
+  ghosts.forEach(ghost => {
+    const atCenter = Math.abs(ghost.x - toPixel(ghost.col)) < 0.6 && Math.abs(ghost.y - toRowCenter(ghost.row)) < 0.6;
+    if (atCenter) {
+      ghost.x = toPixel(ghost.col);
+      ghost.y = toRowCenter(ghost.row);
+      ghost.dir = chooseGhostDirection(ghost);
+    }
+
+    const speed = ghost.frightened ? FRIGHTENED_SPEED : GHOST_SPEED;
+    if (ghost.dir.dx !== 0 || ghost.dir.dy !== 0) {
+      ghost.x += ghost.dir.dx * speed;
+      ghost.y += ghost.dir.dy * speed;
+      if (ghost.row === 8) {
+        if (ghost.x < -TILE / 2) ghost.x = width + TILE / 2;
+        if (ghost.x > width + TILE / 2) ghost.x = -TILE / 2;
+      }
+      ghost.row = Math.round((ghost.y - MAP_TOP - TILE / 2) / TILE);
+      ghost.col = Math.round((ghost.x - TILE / 2) / TILE);
+    }
+  });
+}
+
+function checkCollisions() {
+  ghosts.forEach(ghost => {
+    const dx = ghost.x - player.x;
+    const dy = ghost.y - player.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < TILE * 0.7) {
+      if (ghost.frightened) {
+        score += 200;
+        ghost.row = ghost.home.row;
+        ghost.col = ghost.home.col;
+        ghost.x = toPixel(ghost.col);
+        ghost.y = toRowCenter(ghost.row);
+        ghost.dir = {dx: 0, dy: -1};
+        ghost.frightened = false;
+      } else {
+        state = states.gameOver;
+      }
+    }
   });
 }
 
 function update(deltaTime) {
-  if (state === states.splash) {
-    bird.vy = bird.vy * 0.95;
-    bird.y += bird.vy;
-    bird.y = Math.min(Math.max(bird.y, 60), height - FLOOR_HEIGHT - bird.radius - 20);
-    return;
-  }
+  if (state === states.splash) return;
+  if (state !== states.playing) return;
 
-  bird.vy += GRAVITY;
-  bird.y += bird.vy;
+  updatePlayer();
+  updateGhosts();
+  checkCollisions();
 
-  if (bird.y + bird.radius >= height - FLOOR_HEIGHT) {
-    bird.y = height - FLOOR_HEIGHT - bird.radius;
-    state = states.gameOver;
-  }
-
-  if (bird.y - bird.radius <= 0) {
-    bird.y = bird.radius;
-    bird.vy = 0;
-  }
-
-  const now = performance.now();
-  if (now - lastPipeTime > PIPE_INTERVAL) {
-    spawnPipe();
-    lastPipeTime = now;
-  }
-
-  pipes.forEach(pipe => {
-    pipe.x -= 2.8;
-
-    const hitX = bird.x + bird.radius > pipe.x && bird.x - bird.radius < pipe.x + PIPE_WIDTH;
-    const hitY = bird.y - bird.radius < pipe.top || bird.y + bird.radius > pipe.top + PIPE_GAP;
-
-    if (hitX && hitY) {
-      state = states.gameOver;
+  if (frightenedTimer > 0) {
+    frightenedTimer -= 1;
+    if (frightenedTimer <= 0) {
+      ghosts.forEach(ghost => {
+        ghost.frightened = false;
+      });
     }
-
-    if (!pipe.passed && pipe.x + PIPE_WIDTH < bird.x) {
-      pipe.passed = true;
-      score += 1;
-      bestScore = Math.max(bestScore, score);
-    }
-  });
-
-  pipes = pipes.filter(pipe => pipe.x + PIPE_WIDTH > -50);
+  }
 }
 
-function drawRoundedRect(x, y, w, h, r) {
+function drawMaze() {
+  for (let row = 0; row < MAP_ROWS; row += 1) {
+    for (let col = 0; col < MAP_COLS; col += 1) {
+      const cell = grid[row][col];
+      const x = col * TILE;
+      const y = MAP_TOP + row * TILE;
+
+      if (cell === '#') {
+        ctx.fillStyle = '#1d4f91';
+        ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      }
+      if (cell === '.') {
+        ctx.fillStyle = '#f8f7e7';
+        ctx.beginPath();
+        ctx.arc(x + TILE / 2, y + TILE / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (cell === 'o') {
+        ctx.fillStyle = '#ffec6d';
+        ctx.beginPath();
+        ctx.arc(x + TILE / 2, y + TILE / 2, 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function drawPacMan() {
+  const mouth = 0.18 + Math.abs(Math.sin(frame * 0.16)) * 0.18;
+  let start = 0.25 * Math.PI;
+  let end = 1.75 * Math.PI;
+
+  if (player.dir.dx === -1) {
+    start = 1.25 * Math.PI;
+    end = 0.75 * Math.PI;
+  } else if (player.dir.dy === -1) {
+    start = 1.75 * Math.PI;
+    end = 1.25 * Math.PI;
+  } else if (player.dir.dy === 1) {
+    start = 0.75 * Math.PI;
+    end = 0.25 * Math.PI;
+  }
+
+  ctx.fillStyle = '#fddb4d';
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.moveTo(player.x, player.y);
+  ctx.arc(player.x, player.y, 10, start + mouth, end - mouth, false);
   ctx.closePath();
   ctx.fill();
+}
+
+function drawGhost(ghost) {
+  ctx.save();
+  const x = ghost.x;
+  const y = ghost.y;
+  const bodyColor = ghost.frightened ? '#5f8cce' : ghost.color;
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.arc(x, y - 3, 10, Math.PI, 0, false);
+  ctx.lineTo(x + 10, y + 9);
+  ctx.lineTo(x + 6, y + 5);
+  ctx.lineTo(x + 2, y + 9);
+  ctx.lineTo(x - 2, y + 5);
+  ctx.lineTo(x - 6, y + 9);
+  ctx.lineTo(x - 10, y + 9);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(x - 5, y - 2, 3.6, 0, Math.PI * 2);
+  ctx.arc(x + 5, y - 2, 3.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  const pupilOffset = ghost.dir.dx * 2;
+  const pupilY = ghost.dir.dy * 2;
+  ctx.fillStyle = '#0b1b2f';
+  ctx.beginPath();
+  ctx.arc(x - 5 + pupilOffset, y - 2 + pupilY, 1.8, 0, Math.PI * 2);
+  ctx.arc(x + 5 + pupilOffset, y - 2 + pupilY, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function draw() {
   ctx.clearRect(0, 0, width, height);
 
-  ctx.fillStyle = '#8ee2f8';
+  ctx.fillStyle = '#070f26';
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = '#70c1b3';
-  ctx.fillRect(0, height - FLOOR_HEIGHT, width, FLOOR_HEIGHT);
+  ctx.fillStyle = '#071b43';
+  ctx.fillRect(0, 0, width, MAP_TOP);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '22px Inter, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Score: ${score}`, 18, 32);
+  ctx.fillText(`Best: ${bestScore}`, 18, 56);
+  ctx.textAlign = 'right';
+  ctx.fillText(state === states.splash ? 'Ready?' : state === states.win ? 'You win!' : state === states.gameOver ? 'Game Over' : '', width - 18, 36);
 
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, height - FLOOR_HEIGHT, width, 20);
-
-  ctx.fillStyle = '#ffd259';
-  ctx.beginPath();
-  ctx.arc(bird.x, bird.y, bird.radius, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = '#ffa353';
-  ctx.beginPath();
-  ctx.arc(bird.x + 5, bird.y - 4, 4, 0, Math.PI * 2);
-  ctx.fill();
-
-  pipes.forEach(pipe => {
-    ctx.fillStyle = '#3ca55c';
-    drawRoundedRect(pipe.x, 0, PIPE_WIDTH, pipe.top, 12);
-    drawRoundedRect(pipe.x, pipe.top + PIPE_GAP, PIPE_WIDTH, height - FLOOR_HEIGHT - (pipe.top + PIPE_GAP), 12);
-  });
-
-  ctx.fillStyle = '#1b2a3b';
-  ctx.font = '32px Inter, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(score, width / 2, 64);
+  drawMaze();
+  ghosts.forEach(drawGhost);
+  drawPacMan();
 
   if (state === states.splash) {
-    ctx.fillStyle = 'rgba(27, 42, 59, 0.9)';
-    ctx.font = '24px Inter, sans-serif';
-    ctx.fillText('Click or Space to start', width / 2, height * 0.55);
-  }
-
-  if (state === states.gameOver) {
-    ctx.fillStyle = 'rgba(27, 42, 59, 0.92)';
-    ctx.fillRect(width * 0.5 - 170, height * 0.5 - 90, 340, 180);
-
-    ctx.fillStyle = '#fff';
-    ctx.font = '28px Inter, sans-serif';
-    ctx.fillText('Game Over', width / 2, height * 0.5 - 20);
+    ctx.fillStyle = 'rgba(7, 11, 27, 0.86)';
+    ctx.fillRect(36, 120, width - 72, 120);
+    ctx.fillStyle = '#f8f7e7';
+    ctx.textAlign = 'center';
     ctx.font = '20px Inter, sans-serif';
-    ctx.fillText(`Score: ${score}`, width / 2, height * 0.5 + 20);
-    ctx.fillText(`Best: ${bestScore}`, width / 2, height * 0.5 + 52);
-    ctx.fillText('Click or Space to retry', width / 2, height * 0.5 + 90);
+    ctx.fillText('Press any arrow key to start', width / 2, 170);
+    ctx.font = '16px Inter, sans-serif';
+    ctx.fillText('Eat all pellets while avoiding ghosts.', width / 2, 202);
+    ctx.fillText('Power pellets turn ghosts blue for a short time.', width / 2, 228);
+  }
+
+  if (state === states.win || state === states.gameOver) {
+    const message = state === states.win ? 'You Win!' : 'Game Over';
+    ctx.fillStyle = 'rgba(7, 11, 27, 0.9)';
+    ctx.fillRect(36, 180, width - 72, 120);
+    ctx.fillStyle = '#f8f7e7';
+    ctx.textAlign = 'center';
+    ctx.font = '28px Inter, sans-serif';
+    ctx.fillText(message, width / 2, 220);
+    ctx.font = '18px Inter, sans-serif';
+    ctx.fillText(`Final score: ${score}`, width / 2, 255);
+    ctx.fillText('Press any arrow key to play again.', width / 2, 290);
   }
 }
 
-function loop() {
-  update();
-  draw();
-  frame += 1;
-  requestAnimationFrame(loop);
-}
-
-function flap() {
-  if (state === states.gameOver) {
+function handleInput(dir) {
+  if (state === states.splash) {
+    state = states.playing;
+  }
+  if (state === states.win || state === states.gameOver) {
     resetGame();
     return;
   }
-
-  bird.vy = JUMP;
-  if (state === states.splash) {
-    state = states.playing;
-    lastPipeTime = performance.now();
-  }
+  player.nextDir = dir;
 }
 
 window.addEventListener('keydown', event => {
-  if (event.code === 'Space') {
-    event.preventDefault();
-    flap();
+  const dir = directions[event.key];
+  if (!dir) return;
+  event.preventDefault();
+  handleInput(dir);
+});
+
+canvas.addEventListener('mousedown', () => {
+  if (state === states.splash) {
+    state = states.playing;
+    return;
+  }
+  if (state === states.win || state === states.gameOver) {
+    resetGame();
   }
 });
 
-canvas.addEventListener('mousedown', flap);
 canvas.addEventListener('touchstart', event => {
   event.preventDefault();
-  flap();
+  if (state === states.splash) {
+    state = states.playing;
+    return;
+  }
+  if (state === states.win || state === states.gameOver) {
+    resetGame();
+  }
 });
 
-bestScore = 0;
+function loop(timestamp) {
+  update(timestamp);
+  draw();
+  requestAnimationFrame(loop);
+}
+
 resetGame();
 loop();

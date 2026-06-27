@@ -6,51 +6,77 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: radial-gradient(circle at top, #1d4f91 0%, #0f233f 65%, #060b18 100%);
+  background: linear-gradient(135deg, #050816 0%, #10214a 45%, #3b0f5f 100%);
   display: flex;
   justify-content: center;
   align-items: center;
-  color: #f8f6f1;
+  color: #f8f7ff;
 }
 
-main {
-  width: 100%;
-  max-width: 520px;
+.shell {
+  width: min(100%, 980px);
   padding: 24px;
 }
 
-.game-shell {
-  text-align: center;
+.game-card {
+  background: rgba(2, 8, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+  padding: 20px;
+}
+
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.82rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #84d5ff;
 }
 
 h1 {
-  margin: 0 0 12px;
-  font-size: 2rem;
-  letter-spacing: 0.05em;
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  letter-spacing: 0.08em;
+}
+
+.subtext {
+  max-width: 420px;
+  margin: 0;
+  color: #c1c9ff;
+  line-height: 1.5;
 }
 
 canvas {
   width: 100%;
-  max-width: 456px;
   height: auto;
   border-radius: 18px;
   background: #050a17;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+  border: 2px solid rgba(255, 255, 255, 0.12);
 }
 
-.help {
-  margin-top: 14px;
+.controls {
+  margin-top: 12px;
+  color: #8be8ff;
+  text-align: center;
   font-size: 0.95rem;
-  line-height: 1.5;
-  color: #0015ff;
 }
 
-strong {
-  color: #5bff71;
-}
+@media (max-width: 700px) {
+  .shell {
+    padding: 14px;
+  }
 
-@media (prefers-reduced-motion: reduce) {
-  * {
-    scroll-behavior: auto;
+  .game-card {
+    padding: 14px;
   }
 }

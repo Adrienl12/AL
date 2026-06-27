@@ -3,19 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pac-Man</title>
+  <title>Velocity Rush</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <main>
-    <div class="game-shell">
-      <h1>Pac-Man</h1>
-      <canvas id="gameCanvas" width="456" height="576"></canvas>
-      <div class="help">
-        <p>Use the <strong>arrow keys</strong> to move Pac-Man.</p>
-        <p>Eat every pellet, grab power pellets, and avoid the ghosts.</p>
+  <main class="shell">
+    <section class="game-card">
+      <div class="hud">
+        <div>
+          <p class="eyebrow">Arcade Challenge</p>
+          <h1>Velocity Rush</h1>
+        </div>
+        <p class="subtext">A blazing, original platformer with rings, jumps, and high-speed boosts.</p>
       </div>
-    </div>
+      <canvas id="gameCanvas" width="900" height="500"></canvas>
+      <div class="controls">Arrow keys or WASD to move • Up or Space to jump • Hold Shift to boost</div>
+    </section>
   </main>
   <script src="script.js"></script>
 </body>

@@ -3,482 +3,515 @@ const ctx = canvas.getContext('2d');
 const width = canvas.width;
 const height = canvas.height;
 
-const TILE = 24;
-const MAP_TOP = 72;
-const MAP_ROWS = 18;
-const MAP_COLS = 19;
-const SPEED = 2.1;
-const GHOST_SPEED = 1.8;
-const FRIGHTENED_SPEED = 1.3;
-const FRIGHTENED_DURATION = 680;
+const GROUND_Y = 410;
+const PLAYER_WIDTH = 34;
+const PLAYER_HEIGHT = 46;
+const JUMP_FORCE = -8.2;
+const GRAVITY = 0.3;
+const MOVE_SPEED = 4.8;
+const BOOST_SPEED = 6.8;
+const keys = {};
 
-const states = {
-  splash: 0,
-  playing: 1,
-  win: 2,
-  gameOver: 3,
-};
-
-const rawMap = [
-  '###################',
-  '#........#........#',
-  '#.###.###.#.###.###',
-  '#o###.###.#.###.###',
-  '#.................#',
-  '#.###.#.#####.#.###',
-  '#.....#...#...#....#',
-  '#####.#.###.#.#####',
-  '    #.#.....#.#    ',
-  '#####.#.###.#.#####',
-  '#........#........#',
-  '#.###.###.#.###.###',
-  '#o..#.....P.....#o.#',
-  '###.#.#.###.#.#.###',
-  '#.....#...#...#....#',
-  '#.#########.####.###',
-  '#........#........#',
-  '###################',
-];
-
-const directions = {
-  ArrowUp: {dx: 0, dy: -1},
-  ArrowDown: {dx: 0, dy: 1},
-  ArrowLeft: {dx: -1, dy: 0},
-  ArrowRight: {dx: 1, dy: 0},
-};
-
-let grid;
+let state = 'start';
+let frame = 0;
 let score = 0;
 let bestScore = 0;
-let state = states.splash;
-let frame = 0;
-let player;
-let ghosts;
-let frightenedTimer = 0;
-let pelletsRemaining = 0;
+let lastTime = 0;
+let distance = 0;
+let spawnTimer = 0;
+let ringTimer = 0;
+let enemyTimer = 0;
 
-function initializeGrid() {
-  grid = rawMap.map(row => row.split(''));
-  pelletsRemaining = 0;
-  for (let row = 0; row < MAP_ROWS; row += 1) {
-    for (let col = 0; col < MAP_COLS; col += 1) {
-      const cell = grid[row][col];
-      if (cell === '.' || cell === 'o') {
-        pelletsRemaining += 1;
-      }
-      if (cell === 'P') {
-        player.row = row;
-        player.col = col;
-        grid[row][col] = ' ';
-      }
-    }
-  }
-}
+const player = {
+  x: 120,
+  y: GROUND_Y - PLAYER_HEIGHT,
+  width: PLAYER_WIDTH,
+  height: PLAYER_HEIGHT,
+  vx: 0,
+  vy: 0,
+  onGround: true,
+  direction: 1,
+  boosting: false,
+  health: 100,
+  maxHealth: 100,
+  extraJumpsRemaining: 1,
+};
 
-function toPixel(col) {
-  return col * TILE + TILE / 2;
-}
+const clouds = Array.from({length: 5}, (_, index) => ({
+  x: Math.random() * width,
+  y: 70 + index * 45,
+  speed: 0.25 + Math.random() * 0.3,
+  size: 40 + Math.random() * 30,
+}));
 
-function toRowCenter(row) {
-  return MAP_TOP + row * TILE + TILE / 2;
-}
-
-function isWall(row, col) {
-  if (row < 0 || row >= MAP_ROWS) return true;
-  if (col < 0 || col >= MAP_COLS) {
-    if (row === 8) return false;
-    return true;
-  }
-  return grid[row][col] === '#';
-}
-
-function wrappedCol(col, row) {
-  if (row === 8) {
-    if (col < 0) return MAP_COLS - 1;
-    if (col >= MAP_COLS) return 0;
-  }
-  return col;
-}
-
-function canMove(row, col, dir) {
-  if (!dir) return false;
-  const nextRow = row + dir.dy;
-  const nextCol = wrappedCol(col + dir.dx, row);
-  return !isWall(nextRow, nextCol);
-}
-
-function getMapCell(row, col) {
-  if (row < 0 || row >= MAP_ROWS) return '#';
-  const wrapped = wrappedCol(col, row);
-  return grid[row][wrapped] || '#';
-}
+const obstacles = [];
+const rings = [];
+const enemies = [];
 
 function resetGame() {
-  player = {
-    row: 12,
-    col: 9,
-    x: 0,
-    y: 0,
-    dir: {dx: 0, dy: 0},
-    nextDir: {dx: 0, dy: 0},
-    speed: SPEED,
-  };
-
-  ghosts = [
-    {row: 9, col: 8, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ff6a6a', frightened: false, home: {row: 9, col: 8}},
-    {row: 9, col: 10, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ffb347', frightened: false, home: {row: 9, col: 10}},
-    {row: 10, col: 8, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#6fdfff', frightened: false, home: {row: 10, col: 8}},
-    {row: 10, col: 10, x: 0, y: 0, dir: {dx: 0, dy: -1}, color: '#ff8cff', frightened: false, home: {row: 10, col: 10}},
-  ];
-
-  initializeGrid();
-  player.x = toPixel(player.col);
-  player.y = toRowCenter(player.row);
-  ghosts.forEach(ghost => {
-    ghost.x = toPixel(ghost.col);
-    ghost.y = toRowCenter(ghost.row);
-    ghost.frightened = false;
-  });
-
-  score = 0;
-  frightenedTimer = 0;
-  state = states.splash;
+  state = 'playing';
   frame = 0;
+  distance = 0;
+  score = 0;
+  spawnTimer = 45;
+  ringTimer = 120;
+  enemyTimer = 90;
+  player.x = 120;
+  player.y = GROUND_Y - PLAYER_HEIGHT;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = true;
+  player.direction = 1;
+  player.boosting = false;
+  player.health = 100;
+  player.extraJumpsRemaining = 1;
+  obstacles.length = 0;
+  rings.length = 0;
+  enemies.length = 0;
+  bestScore = Math.max(bestScore, Number(localStorage.getItem('velocity-rush-best') || 0));
 }
 
-function chooseGhostDirection(ghost) {
-  const currentRow = Math.round((ghost.y - MAP_TOP - TILE / 2) / TILE);
-  const currentCol = Math.round((ghost.x - TILE / 2) / TILE);
-  const possible = [];
-  const reverse = {dx: -ghost.dir.dx, dy: -ghost.dir.dy};
+function startGame() {
+  if (state === 'start') {
+    resetGame();
+  }
+}
 
-  for (const dir of Object.values(directions)) {
-    if (dir.dx === reverse.dx && dir.dy === reverse.dy) continue;
-    if (canMove(currentRow, currentCol, dir)) {
-      possible.push(dir);
+function spawnObstacle() {
+  const type = Math.random() < 0.55 ? 'crate' : 'spike';
+  obstacles.push({
+    x: width + 30,
+    y: type === 'crate' ? GROUND_Y - 34 : GROUND_Y - 24,
+    width: type === 'crate' ? 34 : 28,
+    height: type === 'crate' ? 34 : 24,
+    type,
+  });
+}
+
+function spawnRing() {
+  rings.push({
+    x: width + 30,
+    y: GROUND_Y - 90 - Math.random() * 60,
+    radius: 10,
+  });
+}
+
+function spawnEnemy() {
+  enemies.push({
+    x: width + 30,
+    y: GROUND_Y - 70 - Math.random() * 80,
+    width: 30,
+    height: 30,
+    speed: 3.8 + Math.random() * 2.2,
+    phase: Math.random() * Math.PI * 2,
+  });
+}
+
+function handleInput() {
+  const left = keys['ArrowLeft'] || keys['KeyA'];
+  const right = keys['ArrowRight'] || keys['KeyD'];
+  const jumpPressed = keys['ArrowUp'] || keys['Space'] || keys['KeyW'];
+  const boostPressed = keys['ShiftLeft'] || keys['ShiftRight'] || keys['KeyX'];
+
+  player.boosting = boostPressed;
+
+  if (left && !right) {
+    player.vx = -MOVE_SPEED - (player.boosting ? 1.8 : 0);
+    player.direction = -1;
+  } else if (right && !left) {
+    player.vx = MOVE_SPEED + (player.boosting ? 1.8 : 0);
+    player.direction = 1;
+  } else {
+    player.vx = 0;
+  }
+
+  if (jumpPressed && (player.onGround || player.extraJumpsRemaining > 0)) {
+    if (player.onGround) {
+      player.vy = JUMP_FORCE;
+      player.onGround = false;
+      player.extraJumpsRemaining = 1;
+    } else if (player.extraJumpsRemaining > 0) {
+      player.vy = JUMP_FORCE;
+      player.extraJumpsRemaining -= 1;
+      player.onGround = false;
     }
+    keys['ArrowUp'] = false;
+    keys['Space'] = false;
+    keys['KeyW'] = false;
+  }
+}
+
+function updatePlayer(dt) {
+  handleInput();
+
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  player.vy += GRAVITY * dt;
+
+  if (player.y >= GROUND_Y - player.height) {
+    player.y = GROUND_Y - player.height;
+    player.vy = 0;
+    player.onGround = true;
+    player.extraJumpsRemaining = 1;
   }
 
-  if (possible.length === 0) {
-    if (canMove(currentRow, currentCol, reverse)) {
-      return reverse;
+  if (player.x < 20) {
+    player.x = 20;
+  }
+
+  if (player.x > width - 70) {
+    player.x = width - 70;
+  }
+}
+
+function updateWorld(dt) {
+  frame += 1;
+  distance += 1.2 * dt;
+  score = Math.floor(distance) + rings.length * 10;
+
+  clouds.forEach(cloud => {
+    cloud.x -= cloud.speed * dt;
+    if (cloud.x + cloud.size < -20) {
+      cloud.x = width + 20;
+      cloud.y = 50 + Math.random() * 120;
+      cloud.size = 34 + Math.random() * 30;
     }
-    return {dx: 0, dy: 0};
-  }
-
-  if (ghost.frightened) {
-    return possible[Math.floor(Math.random() * possible.length)];
-  }
-
-  const targetRow = player.row;
-  const targetCol = player.col;
-  possible.sort((a, b) => {
-    const aRow = currentRow + a.dy;
-    const aCol = wrappedCol(currentCol + a.dx, currentRow);
-    const bRow = currentRow + b.dy;
-    const bCol = wrappedCol(currentCol + b.dx, currentRow);
-    const aDist = Math.abs(aRow - targetRow) + Math.abs(aCol - targetCol);
-    const bDist = Math.abs(bRow - targetRow) + Math.abs(bCol - targetCol);
-    return aDist - bDist;
   });
 
-  if (Math.random() < 0.15 && possible.length > 1) {
-    return possible[Math.floor(Math.random() * possible.length)];
+  if (spawnTimer <= 0) {
+    spawnObstacle();
+    spawnTimer = 48 - Math.min(20, Math.floor(distance / 180));
+  } else {
+    spawnTimer -= dt;
   }
 
-  return possible[0];
-}
-
-function updatePlayer() {
-  const centerX = toPixel(player.col);
-  const centerY = toRowCenter(player.row);
-  const atCenter = Math.abs(player.x - centerX) < 0.6 && Math.abs(player.y - centerY) < 0.6;
-
-  if (atCenter) {
-    player.x = centerX;
-    player.y = centerY;
-    if (canMove(player.row, player.col, player.nextDir)) {
-      player.dir = player.nextDir;
-    }
-    if (!canMove(player.row, player.col, player.dir)) {
-      player.dir = {dx: 0, dy: 0};
-    }
+  if (ringTimer <= 0) {
+    spawnRing();
+    ringTimer = 95 + Math.random() * 60;
+  } else {
+    ringTimer -= dt;
   }
 
-  if (player.dir.dx !== 0 || player.dir.dy !== 0) {
-    const nextRow = player.row + player.dir.dy;
-    const nextCol = wrappedCol(player.col + player.dir.dx, player.row);
-    if (!isWall(nextRow, nextCol)) {
-      player.x += player.dir.dx * player.speed;
-      player.y += player.dir.dy * player.speed;
-      if (player.row === 8) {
-        if (player.x < -TILE / 2) player.x = width + TILE / 2;
-        if (player.x > width + TILE / 2) player.x = -TILE / 2;
-      }
-      player.row = Math.round((player.y - MAP_TOP - TILE / 2) / TILE);
-      player.col = Math.round((player.x - TILE / 2) / TILE);
-    } else {
-      player.x = centerX;
-      player.y = centerY;
-      player.dir = {dx: 0, dy: 0};
+  if (enemyTimer <= 0) {
+    spawnEnemy();
+    enemyTimer = 110 + Math.random() * 70;
+  } else {
+    enemyTimer -= dt;
+  }
+
+  for (let i = obstacles.length - 1; i >= 0; i -= 1) {
+    const obstacle = obstacles[i];
+    obstacle.x -= (4.8 + Math.min(distance / 320, 3.4)) * dt;
+    if (obstacle.x + obstacle.width < -20) {
+      obstacles.splice(i, 1);
     }
   }
 
-  const cell = getMapCell(player.row, player.col);
-  if (cell === '.' || cell === 'o') {
-    grid[player.row][wrappedCol(player.col, player.row)] = ' ';
-    pelletsRemaining -= 1;
-    score += cell === 'o' ? 50 : 10;
-
-    if (cell === 'o') {
-      frightenedTimer = FRIGHTENED_DURATION;
-      ghosts.forEach(ghost => {
-        ghost.frightened = true;
-      });
-    }
-
-    if (pelletsRemaining <= 0) {
-      state = states.win;
+  for (let i = rings.length - 1; i >= 0; i -= 1) {
+    const ring = rings[i];
+    ring.x -= (5 + Math.min(distance / 300, 3)) * dt;
+    if (ring.x + ring.radius < -16) {
+      rings.splice(i, 1);
     }
   }
-}
 
-function updateGhosts() {
-  ghosts.forEach(ghost => {
-    const atCenter = Math.abs(ghost.x - toPixel(ghost.col)) < 0.6 && Math.abs(ghost.y - toRowCenter(ghost.row)) < 0.6;
-    if (atCenter) {
-      ghost.x = toPixel(ghost.col);
-      ghost.y = toRowCenter(ghost.row);
-      ghost.dir = chooseGhostDirection(ghost);
+  for (let i = enemies.length - 1; i >= 0; i -= 1) {
+    const enemy = enemies[i];
+    enemy.x -= (enemy.speed + Math.min(distance / 520, 2.4)) * dt;
+    enemy.y += Math.sin(frame * 0.09 + enemy.phase) * 0.45 * dt;
+    if (enemy.x + enemy.width < -20) {
+      enemies.splice(i, 1);
     }
-
-    const speed = ghost.frightened ? FRIGHTENED_SPEED : GHOST_SPEED;
-    if (ghost.dir.dx !== 0 || ghost.dir.dy !== 0) {
-      ghost.x += ghost.dir.dx * speed;
-      ghost.y += ghost.dir.dy * speed;
-      if (ghost.row === 8) {
-        if (ghost.x < -TILE / 2) ghost.x = width + TILE / 2;
-        if (ghost.x > width + TILE / 2) ghost.x = -TILE / 2;
-      }
-      ghost.row = Math.round((ghost.y - MAP_TOP - TILE / 2) / TILE);
-      ghost.col = Math.round((ghost.x - TILE / 2) / TILE);
-    }
-  });
+  }
 }
 
 function checkCollisions() {
-  ghosts.forEach(ghost => {
-    const dx = ghost.x - player.x;
-    const dy = ghost.y - player.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    if (distance < TILE * 0.7) {
-      if (ghost.frightened) {
-        score += 200;
-        ghost.row = ghost.home.row;
-        ghost.col = ghost.home.col;
-        ghost.x = toPixel(ghost.col);
-        ghost.y = toRowCenter(ghost.row);
-        ghost.dir = {dx: 0, dy: -1};
-        ghost.frightened = false;
+  for (let i = obstacles.length - 1; i >= 0; i -= 1) {
+    const obstacle = obstacles[i];
+    const overlapX = player.x + player.width > obstacle.x && player.x < obstacle.x + obstacle.width;
+    const overlapY = player.y + player.height > obstacle.y && player.y < obstacle.y + obstacle.height;
+
+    if (overlapX && overlapY) {
+      if (player.boosting) {
+        obstacles.splice(i, 1);
+        score += 80;
       } else {
-        state = states.gameOver;
+        player.health -= 25;
+        if (player.health <= 0) {
+          state = 'gameover';
+          bestScore = Math.max(bestScore, score);
+          localStorage.setItem('velocity-rush-best', String(bestScore));
+        }
       }
+    }
+  }
+
+  for (let i = rings.length - 1; i >= 0; i -= 1) {
+    const ring = rings[i];
+    const dx = player.x + player.width / 2 - ring.x;
+    const dy = player.y + player.height / 2 - ring.y;
+    if (Math.hypot(dx, dy) < 24) {
+      rings.splice(i, 1);
+      score += 120;
+      bestScore = Math.max(bestScore, score);
+      localStorage.setItem('velocity-rush-best', String(bestScore));
+    }
+  }
+
+  for (let i = enemies.length - 1; i >= 0; i -= 1) {
+    const enemy = enemies[i];
+    const overlapX = player.x + player.width > enemy.x && player.x < enemy.x + enemy.width;
+    const overlapY = player.y + player.height > enemy.y && player.y < enemy.y + enemy.height;
+    if (overlapX && overlapY) {
+      if (player.boosting) {
+        enemies.splice(i, 1);
+        score += 100;
+      } else {
+        player.health -= 25;
+        if (player.health <= 0) {
+          state = 'gameover';
+          bestScore = Math.max(bestScore, score);
+          localStorage.setItem('velocity-rush-best', String(bestScore));
+        }
+      }
+    }
+  }
+}
+
+function update(dt) {
+  if (state === 'playing') {
+    updatePlayer(dt);
+    updateWorld(dt);
+    checkCollisions();
+  }
+}
+
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, height);
+  sky.addColorStop(0, '#071726');
+  sky.addColorStop(0.5, '#1f3d71');
+  sky.addColorStop(1, '#3d146b');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = '#ffd788';
+  ctx.beginPath();
+  ctx.arc(760, 95, 42, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#0a1730';
+  ctx.beginPath();
+  ctx.moveTo(0, 320);
+  ctx.lineTo(170, 280);
+  ctx.lineTo(320, 315);
+  ctx.lineTo(480, 260);
+  ctx.lineTo(650, 295);
+  ctx.lineTo(900, 240);
+  ctx.lineTo(900, 500);
+  ctx.lineTo(0, 500);
+  ctx.closePath();
+  ctx.fill();
+
+  clouds.forEach(cloud => {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(cloud.x, cloud.y, cloud.size * 0.32, 0, Math.PI * 2);
+    ctx.arc(cloud.x + cloud.size * 0.25, cloud.y - 8, cloud.size * 0.28, 0, Math.PI * 2);
+    ctx.arc(cloud.x + cloud.size * 0.55, cloud.y, cloud.size * 0.34, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = '#0f1d37';
+  ctx.fillRect(0, GROUND_Y, width, height - GROUND_Y);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < width; i += 38) {
+    ctx.beginPath();
+    ctx.moveTo(i, GROUND_Y + 6);
+    ctx.lineTo(i + 16, GROUND_Y + 6);
+    ctx.stroke();
+  }
+}
+
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.scale(player.direction, 1);
+
+  ctx.fillStyle = '#47e0ff';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, player.width, player.height, 12);
+  ctx.fill();
+
+  ctx.fillStyle = '#0b1c2d';
+  ctx.beginPath();
+  ctx.arc(10, 18, 3.6, 0, Math.PI * 2);
+  ctx.arc(24, 18, 3.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffe167';
+  ctx.beginPath();
+  ctx.moveTo(8, 8);
+  ctx.lineTo(18, -4);
+  ctx.lineTo(28, 8);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(8, 26, 18, 6);
+  ctx.restore();
+}
+
+function drawObstacles() {
+  obstacles.forEach(obstacle => {
+    if (obstacle.type === 'crate') {
+      ctx.fillStyle = '#9b4b24';
+      ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+      ctx.strokeStyle = '#3f1c0b';
+      ctx.strokeRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+    } else {
+      ctx.fillStyle = '#ff5d6c';
+      ctx.beginPath();
+      ctx.moveTo(obstacle.x, obstacle.y + obstacle.height);
+      ctx.lineTo(obstacle.x + obstacle.width / 2, obstacle.y);
+      ctx.lineTo(obstacle.x + obstacle.width, obstacle.y + obstacle.height);
+      ctx.closePath();
+      ctx.fill();
     }
   });
 }
 
-function update(deltaTime) {
-  if (state === states.splash) return;
-  if (state !== states.playing) return;
-
-  updatePlayer();
-  updateGhosts();
-  checkCollisions();
-
-  if (frightenedTimer > 0) {
-    frightenedTimer -= 1;
-    if (frightenedTimer <= 0) {
-      ghosts.forEach(ghost => {
-        ghost.frightened = false;
-      });
-    }
-  }
+function drawEnemies() {
+  enemies.forEach(enemy => {
+    ctx.save();
+    ctx.translate(enemy.x, enemy.y);
+    ctx.fillStyle = '#ff4b7f';
+    ctx.fillRect(0, 0, enemy.width, enemy.height);
+    ctx.fillStyle = '#220516';
+    ctx.fillRect(6, 8, 8, 8);
+    ctx.fillRect(16, 8, 8, 8);
+    ctx.fillRect(8, 18, 14, 6);
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect(6, 2, 18, 4);
+    ctx.restore();
+  });
 }
 
-function drawMaze() {
-  for (let row = 0; row < MAP_ROWS; row += 1) {
-    for (let col = 0; col < MAP_COLS; col += 1) {
-      const cell = grid[row][col];
-      const x = col * TILE;
-      const y = MAP_TOP + row * TILE;
-
-      if (cell === '#') {
-        ctx.fillStyle = '#1d4f91';
-        ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
-      }
-      if (cell === '.') {
-        ctx.fillStyle = '#f8f7e7';
-        ctx.beginPath();
-        ctx.arc(x + TILE / 2, y + TILE / 2, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      if (cell === 'o') {
-        ctx.fillStyle = '#ffec6d';
-        ctx.beginPath();
-        ctx.arc(x + TILE / 2, y + TILE / 2, 7, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
+function drawRings() {
+  rings.forEach(ring => {
+    ctx.save();
+    ctx.translate(ring.x, ring.y);
+    ctx.strokeStyle = '#ffd967';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, ring.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#fff4b8';
+    ctx.beginPath();
+    ctx.arc(0, 0, ring.radius - 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
 }
 
-function drawPacMan() {
-  const mouth = 0.18 + Math.abs(Math.sin(frame * 0.16)) * 0.18;
-  let start = 0.25 * Math.PI;
-  let end = 1.75 * Math.PI;
+function drawHud() {
+  ctx.fillStyle = 'rgba(2, 8, 20, 0.8)';
+  ctx.fillRect(18, 18, 300, 112);
+  ctx.fillStyle = '#fef6ff';
+  ctx.font = 'bold 24px Inter, sans-serif';
+  ctx.fillText(`Score ${score}`, 34, 48);
+  ctx.font = '16px Inter, sans-serif';
+  ctx.fillText(`Best ${bestScore}`, 34, 76);
 
-  if (player.dir.dx === -1) {
-    start = 1.25 * Math.PI;
-    end = 0.75 * Math.PI;
-  } else if (player.dir.dy === -1) {
-    start = 1.75 * Math.PI;
-    end = 1.25 * Math.PI;
-  } else if (player.dir.dy === 1) {
-    start = 0.75 * Math.PI;
-    end = 0.25 * Math.PI;
-  }
+  ctx.fillStyle = '#ffd166';
+  ctx.font = 'bold 14px Inter, sans-serif';
+  ctx.fillText('Health', 34, 104);
+  ctx.fillStyle = '#2d3748';
+  ctx.fillRect(90, 92, 170, 12);
+  ctx.fillStyle = '#4ade80';
+  ctx.fillRect(90, 92, (player.health / player.maxHealth) * 170, 12);
 
-  ctx.fillStyle = '#fddb4d';
-  ctx.beginPath();
-  ctx.moveTo(player.x, player.y);
-  ctx.arc(player.x, player.y, 10, start + mouth, end - mouth, false);
-  ctx.closePath();
-  ctx.fill();
+  ctx.fillStyle = '#84d5ff';
+  ctx.font = 'bold 14px Inter, sans-serif';
+  ctx.fillText(state === 'playing' ? 'BOOST READY' : state === 'gameover' ? 'CRASHED' : 'READY TO RUN', 34, 126);
 }
 
-function drawGhost(ghost) {
-  ctx.save();
-  const x = ghost.x;
-  const y = ghost.y;
-  const bodyColor = ghost.frightened ? '#5f8cce' : ghost.color;
-  ctx.fillStyle = bodyColor;
-  ctx.beginPath();
-  ctx.arc(x, y - 3, 10, Math.PI, 0, false);
-  ctx.lineTo(x + 10, y + 9);
-  ctx.lineTo(x + 6, y + 5);
-  ctx.lineTo(x + 2, y + 9);
-  ctx.lineTo(x - 2, y + 5);
-  ctx.lineTo(x - 6, y + 9);
-  ctx.lineTo(x - 10, y + 9);
-  ctx.closePath();
-  ctx.fill();
+function drawOverlay() {
+  if (state === 'start') {
+    ctx.fillStyle = 'rgba(3, 8, 23, 0.72)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#fef6ff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 34px Inter, sans-serif';
+    ctx.fillText('Velocity Rush', width / 2, 184);
+    ctx.font = '20px Inter, sans-serif';
+    ctx.fillText('Press Enter or Space to blast into the neon zone.', width / 2, 222);
+    ctx.font = '16px Inter, sans-serif';
+    ctx.fillText('Jump over hazards, collect rings, and hold Shift to smash through obstacles.', width / 2, 258);
+    ctx.fillText('Tap jump twice for a double jump and watch your health bar.', width / 2, 286);
+    ctx.textAlign = 'left';
+  }
 
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.arc(x - 5, y - 2, 3.6, 0, Math.PI * 2);
-  ctx.arc(x + 5, y - 2, 3.6, 0, Math.PI * 2);
-  ctx.fill();
-
-  const pupilOffset = ghost.dir.dx * 2;
-  const pupilY = ghost.dir.dy * 2;
-  ctx.fillStyle = '#0b1b2f';
-  ctx.beginPath();
-  ctx.arc(x - 5 + pupilOffset, y - 2 + pupilY, 1.8, 0, Math.PI * 2);
-  ctx.arc(x + 5 + pupilOffset, y - 2 + pupilY, 1.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  if (state === 'gameover') {
+    ctx.fillStyle = 'rgba(3, 8, 23, 0.78)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#ffefaf';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 34px Inter, sans-serif';
+    ctx.fillText('Crash! Try again.', width / 2, 190);
+    ctx.font = '18px Inter, sans-serif';
+    ctx.fillText(`Final Score: ${score}`, width / 2, 230);
+    ctx.fillText('Press Enter or R to restart.', width / 2, 262);
+    ctx.textAlign = 'left';
+  }
 }
 
 function draw() {
-  ctx.clearRect(0, 0, width, height);
-
-  ctx.fillStyle = '#070f26';
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.fillStyle = '#071b43';
-  ctx.fillRect(0, 0, width, MAP_TOP);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '22px Inter, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`Score: ${score}`, 18, 32);
-  ctx.fillText(`Best: ${bestScore}`, 18, 56);
-  ctx.textAlign = 'right';
-  ctx.fillText(state === states.splash ? 'Ready?' : state === states.win ? 'You win!' : state === states.gameOver ? 'Game Over' : '', width - 18, 36);
-
-  drawMaze();
-  ghosts.forEach(drawGhost);
-  drawPacMan();
-
-  if (state === states.splash) {
-    ctx.fillStyle = 'rgba(7, 11, 27, 0.86)';
-    ctx.fillRect(36, 120, width - 72, 120);
-    ctx.fillStyle = '#f8f7e7';
-    ctx.textAlign = 'center';
-    ctx.font = '20px Inter, sans-serif';
-    ctx.fillText('Press any arrow key to start', width / 2, 170);
-    ctx.font = '16px Inter, sans-serif';
-    ctx.fillText('Eat all pellets while avoiding ghosts.', width / 2, 202);
-    ctx.fillText('Power pellets turn ghosts blue for a short time.', width / 2, 228);
-  }
-
-  if (state === states.win || state === states.gameOver) {
-    const message = state === states.win ? 'You Win!' : 'Game Over';
-    ctx.fillStyle = 'rgba(7, 11, 27, 0.9)';
-    ctx.fillRect(36, 180, width - 72, 120);
-    ctx.fillStyle = '#f8f7e7';
-    ctx.textAlign = 'center';
-    ctx.font = '28px Inter, sans-serif';
-    ctx.fillText(message, width / 2, 220);
-    ctx.font = '18px Inter, sans-serif';
-    ctx.fillText(`Final score: ${score}`, width / 2, 255);
-    ctx.fillText('Press any arrow key to play again.', width / 2, 290);
-  }
+  drawBackground();
+  drawRings();
+  drawObstacles();
+  drawEnemies();
+  drawPlayer();
+  drawHud();
+  drawOverlay();
 }
-
-function handleInput(dir) {
-  if (state === states.splash) {
-    state = states.playing;
-  }
-  if (state === states.win || state === states.gameOver) {
-    resetGame();
-    return;
-  }
-  player.nextDir = dir;
-}
-
-window.addEventListener('keydown', event => {
-  const dir = directions[event.key];
-  if (!dir) return;
-  event.preventDefault();
-  handleInput(dir);
-});
-
-canvas.addEventListener('mousedown', () => {
-  if (state === states.splash) {
-    state = states.playing;
-    return;
-  }
-  if (state === states.win || state === states.gameOver) {
-    resetGame();
-  }
-});
-
-canvas.addEventListener('touchstart', event => {
-  event.preventDefault();
-  if (state === states.splash) {
-    state = states.playing;
-    return;
-  }
-  if (state === states.win || state === states.gameOver) {
-    resetGame();
-  }
-});
 
 function loop(timestamp) {
-  update(timestamp);
+  if (!lastTime) {
+    lastTime = timestamp;
+  }
+  const dt = Math.min((timestamp - lastTime) / 16.67, 2);
+  lastTime = timestamp;
+  update(dt);
   draw();
   requestAnimationFrame(loop);
 }
 
-resetGame();
-loop();
+window.addEventListener('keydown', event => {
+  keys[event.code] = true;
+  if (event.code === 'Enter' || event.code === 'Space') {
+    event.preventDefault();
+    if (state === 'start') {
+      resetGame();
+    } else if (state === 'gameover') {
+      resetGame();
+    }
+  }
+  if (event.code === 'KeyR' && state === 'gameover') {
+    resetGame();
+  }
+});
+
+window.addEventListener('keyup', event => {
+  keys[event.code] = false;
+});
+
+canvas.addEventListener('pointerdown', () => {
+  if (state === 'start' || state === 'gameover') {
+    resetGame();
+  }
+});
+
+bestScore = Number(localStorage.getItem('velocity-rush-best') || 0);
+loop(0);
